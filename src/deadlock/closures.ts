@@ -65,11 +65,17 @@ export function colorClosures(input: ClosureInput): Map<number, number> {
   return result;
 }
 
-/** 必死判据：全部色闭包 ≥ 8。 */
-export function isGuaranteedDead(closures: Map<number, number>): boolean {
+/** dock 对应的闭包阈值：第 D 手必死 ⟺ 逐色闭包 ≥ D+1（参考定理 2.2 的推广）。 */
+export function closureThresholdForDock(dock: number): number {
+  return Math.max(3, dock) + 1;
+}
+
+/** 必死判据：全部色闭包 ≥ dock+1。 */
+export function isGuaranteedDead(closures: Map<number, number>, dock = 7): boolean {
   if (closures.size === 0) return false;
+  const threshold = closureThresholdForDock(dock);
   for (const size of closures.values()) {
-    if (size < 8) return false;
+    if (size < threshold) return false;
   }
   return true;
 }
@@ -82,9 +88,11 @@ export function isGuaranteedDead(closures: Map<number, number>): boolean {
 export function coreMeetsThreshold(
   coreClosures: Map<number, number>,
   wildcardColorCounts: Map<number, number>,
+  dock = 7,
 ): boolean {
+  const base = closureThresholdForDock(dock);
   for (const [color, size] of coreClosures) {
-    const threshold = 8 - (wildcardColorCounts.get(color) ?? 0);
+    const threshold = base - (wildcardColorCounts.get(color) ?? 0);
     if (size < threshold) return false;
   }
   return coreClosures.size > 0;

@@ -1,10 +1,11 @@
 /**
  * dagT 模板族 —— 参考实现 dag_geometry.py 的 TypeScript 移植。
  *
- * 三个构造器（全部由闭包判据保证必死，测试用 golden 复核）：
+ * 四个构造器（全部由闭包判据保证必死，测试用 golden 复核）：
  *  - minimal12tVariants()        12t3l 最小边（E=10）24 个变体（hub × avoid × pick 对称性）
  *  - minimalYVariant(y)          l=3 任意 y≥4（统一放大器优化 v2，定理 4.5c 最优）
  *  - minimalYDeepVariant(y, l)   l≥4 塔式/中继放大器（选项族 DP，族内最优）
+ *  - buildBroomVariant(t, l, d)  扫帚通用族：任意 dock d（3..14）闭包 ≥ d+1
  *
  * 约定：
  *  - 模板节点 id 1 起，与参考实现一致；
@@ -12,9 +13,12 @@
  *  - 模板花色归一化为 0..y-1：cap 色 p → p-1，hub 色（100+i）→ c+i。
  *
  * 搜索只用结构；染色依据变体表的 col。canonicalVariant 为生成用的规范变体。
+ * dock 默认 7：12t3l 24 变体 / minimal_y / minimal_y_deep 原路径不变；
+ * dock ≠ 7（或非 12t3l）走 broom 通用构造。
  */
 
 import type { DagTVariant, DagTNode } from './types.js';
+import { colorClosures } from './closures.js';
 
 interface RawVariant {
   id: string;
@@ -46,13 +50,24 @@ function toVariant(raw: RawVariant): DagTVariant {
   };
 }
 
-function assertDeadlockShape(tileCount: number, layerLimit: number): number {
+function assertDeadlockShape(tileCount: number, layerLimit: number, dock = 7): number {
   if (!Number.isInteger(tileCount) || tileCount % 3 !== 0) {
     throw new Error(`deadlock tileCount ${tileCount} 必须是 3 的倍数`);
   }
   const n = tileCount / 3;
-  if (n < 4) throw new Error(`deadlock 花色数 ${n} < 4：必死局至少 4 色（tile ≥ 12）`);
-  if (layerLimit < 3) throw new Error(`deadlock layerLimit ${layerLimit} < 3：1 层必可解、2 层不可能`);
+  if (dock < 3) throw new Error(`dock ${dock} < 3：槽位过小不可能死（每色 ≤2 时可凑三消）`);
+  const minColors = Math.ceil(dock / 2);
+  if (n < minColors) {
+    throw new Error(
+      `deadlock 花色数 ${n} < ${minColors}：dock=${dock} 下第 ${dock} 张入槽死亡需要至少 ${minColors} 色（tile ≥ ${minColors * 3}）`,
+    );
+  }
+  if (layerLimit < 2) throw new Error(`deadlock layerLimit ${layerLimit} < 2：1 层必可解`);
+  // dock=7 定理：2 层不可能；dock≥8 扫帚族层数下界 ceil((dock−2)/4)+1
+  const minLayers = dock === 7 ? 3 : dock >= 8 ? Math.ceil((dock - 2) / 4) + 1 : 2;
+  if (layerLimit < minLayers) {
+    throw new Error(`deadlock layerLimit ${layerLimit} < ${minLayers}：dock=${dock} 下至少需要 ${minLayers} 层`);
+  }
   return n;
 }
 
@@ -464,25 +479,184 @@ export function minimalYDeepVariant(y: number, layers: number): DagTVariant {
 // ═══════════════════════════════════════════════════════════
 
 /**
- * 给定 t（=3n）与 l，返回 dagT 变体族。
- *  (12, 3) → 24 个 E=10 变体（染色变体表）；
- *  其余    → 单变体（l=3 定理最优 / l≥4 塔式族）。
+ * 扫帚（broom）通用必死构造：任意 dock（3..14）的闭包 ≥ dock+1 模板。
+ *
+ * 结构（每色恰 3 张，层数 = m+1，m = ⌈(dock−2)/4⌉ ≤ 3）：
+ *   hub 色 0：脊柱 h_1..h_m（层 2..m+1）+ 补足底（层 1，共 3 张）。
+ *   h_j（j≥2）压 {h_{j−1}} + 4 张底；底按「色对轮询」领取（每色对先领 1 张），
+ *     保证脊柱子树覆盖最大化、且任意色对在 reach(h_{m−1}) 中被覆盖 ≤2 张。
+ *   其余色：2 张底 + 1 张顶（层 m+1）：
+ *     m=1：顶压 4 张非本色底 ⇒ 闭包 = 3 + 4 = 7 ≥ dock+1；
+ *     m≥2：顶压 {h_{m−1}} + 4 张填充底（优先「reach 外且非本色」）
+ *       ⇒ 闭包 = 1 + (2−k) + (5m−5) + o，k=本色底被脊柱覆盖数、o=填充新增数，
+ *       轮询取底保证 o ≥ dock+1−(5m−3)+k 恒可满足（n ≥ ⌈dock/2⌉ 时）。
+ * 防御性复核：逐色闭包 < dock+1 即抛错。
+ * dock > 14 需每色 ≥6 张（研究缺口），构造抛错。
  */
-export function buildDagTVariants(tileCount: number, layerLimit: number): DagTVariant[] {
-  assertDeadlockShape(tileCount, layerLimit);
-  if (tileCount === 12 && layerLimit === 3) return minimal12tVariants();
-  if (layerLimit === 3) return [minimalYVariant(tileCount / 3)];
-  return [minimalYDeepVariant(tileCount / 3, layerLimit)];
+export function buildBroomVariant(tileCount: number, layerLimit: number, dock: number): DagTVariant {
+  const n = assertDeadlockShape(tileCount, layerLimit, dock);
+  if (dock > 14) {
+    throw new Error(`dock ${dock} > 14：每色 3 张最多支撑到 dock=14（闭包 ≤15），更大 dock 需每色 6 张（未实现）`);
+  }
+  const S = dock - 2;          // 每色闭包需要的「底支撑」数
+  const m = Math.ceil(S / 4);  // 脊柱张数（hub 色占用）
+  if (m > 3) throw new Error(`dock ${dock} 需要脊柱 ${m} 张 > 3，超出每色 3 张上限`);
+  const layers = new Map<number, number>();
+  const deps = new Map<number, Set<number>>();
+  const col = new Map<number, number>();
+
+  // 节点 id 布局：1..3n
+  //   hub 色 0：脊柱 1..m（层 2..m+1）+ 补足底 m+1..3（层 1，恰 3 张/色）
+  //   其余色 i（1..n−1）：底 3+2i−1, 3+2i（层1）；顶 3+2(n−1)+i（层 m+1）
+  const bottomOf = (i: number): [number, number] => [3 + 2 * i - 1, 3 + 2 * i];
+  // hub 补足底
+  for (let j = m + 1; j <= 3; j++) {
+    layers.set(j, 1);
+    deps.set(j, new Set());
+    col.set(j, 0);
+  }
+  for (let i = 1; i <= n - 1; i++) {
+    const [b1, b2] = bottomOf(i);
+    layers.set(b1, 1);
+    layers.set(b2, 1);
+    deps.set(b1, new Set());
+    deps.set(b2, new Set());
+    col.set(b1, i);
+    col.set(b2, i);
+  }
+  // hub 脊柱
+  for (let j = 1; j <= m; j++) {
+    layers.set(j, j + 1);
+    col.set(j, 0);
+    deps.set(j, new Set());
+  }
+  // 其余色顶
+  for (let i = 1; i <= n - 1; i++) {
+    const top = 3 + 2 * (n - 1) + i;
+    layers.set(top, m + 1);
+    col.set(top, i);
+    deps.set(top, new Set());
+  }
+
+  // 底分组：其余色对（容量 2）+ hub 补足底（各容量 1）。
+  // 领取规则：其余色对优先、组内轮询（每次取已领取最少的组）；补足底仅在
+  // 其余色对耗尽后使用 —— 脊柱覆盖尽量铺开且不吞占 hub 自己的底。
+  const groups: number[][] = [];
+  for (let i = 1; i <= n - 1; i++) groups.push([bottomOf(i)[0], bottomOf(i)[1]]);
+  for (let j = m + 1; j <= 3; j++) groups.push([j]);
+  const used = groups.map(() => 0);
+  const pickBottom = (): number | null => {
+    let best = -1;
+    for (let g = 0; g < n - 1; g++) {
+      if (used[g] >= groups[g].length) continue;
+      if (best === -1 || used[g] < used[best]) best = g;
+    }
+    if (best !== -1) return groups[best][used[best]++];
+    for (let g = n - 1; g < groups.length; g++) {
+      if (used[g] < groups[g].length) return groups[g][used[g]++];
+    }
+    return null;
+  };
+
+  // 脊柱依赖：h_j = {h_{j−1}} + 4 张轮询底（h_1 无链，同样 4 张）
+  for (let j = 1; j <= m; j++) {
+    const d = deps.get(j)!;
+    if (j > 1) d.add(j - 1);
+    while (d.size < (j === 1 ? 4 : 5)) {
+      const b = pickBottom();
+      if (b === null) break;
+      d.add(b);
+    }
+  }
+
+  // 其余色顶
+  for (let i = 1; i <= n - 1; i++) {
+    const top = 3 + 2 * (n - 1) + i;
+    const d = deps.get(top)!;
+    const own = bottomOf(i);
+    if (m === 1) {
+      // 顶压 4 张非本色底 ⇒ 闭包 = 3 + 4 = 7 ≥ dock+1（底不足时取全部，闭包 = 3 + 可用数）
+      for (const b of groups.flat()) {
+        if (b === own[0] || b === own[1]) continue;
+        if (d.size >= 4) break;
+        d.add(b);
+      }
+    } else {
+      // 顶压 {h_{m−1}} + 4 张填充底，按新增贡献排序：
+      //   不在 reach(h_{m−1}) 且非本色 > reach 内且非本色 > 本色
+      d.add(m - 1);
+      const reachPrev = new Set<number>();
+      for (let j = 1; j <= m - 1; j++) {
+        reachPrev.add(j);
+        for (const x of deps.get(j)!) reachPrev.add(x);
+      }
+      const outside: number[] = [];
+      const inside: number[] = [];
+      for (const b of groups.flat()) {
+        if (b === own[0] || b === own[1]) continue;
+        (reachPrev.has(b) ? inside : outside).push(b);
+      }
+      outside.push(...inside, own[0], own[1]);
+      for (const b of outside) {
+        if (d.size >= 5) break;
+        d.add(b);
+      }
+    }
+  }
+
+  const variant = toVariant({
+    id: `broom-${tileCount}t${layerLimit}l-d${dock}`,
+    tileCount,
+    layerLimit,
+    layers,
+    deps,
+    col,
+  });
+
+  // 逐色闭包复核（构造式保证，防御性）
+  const depsOf = new Map<number, number[]>();
+  const colorOf = new Map<number, number>();
+  for (const node of variant.nodes) {
+    depsOf.set(node.id, [...node.deps]);
+    colorOf.set(node.id, node.color);
+  }
+  const closures = colorClosures({
+    chosenIds: new Set(variant.nodes.map(n => n.id)),
+    depsOf,
+    colorOf,
+  });
+  for (const [color, size] of closures) {
+    if (size < dock + 1) {
+      throw new Error(`broom 构造失败：色 ${color} 闭包 ${size} < ${dock + 1}`);
+    }
+  }
+  return variant;
 }
 
-/** 生成用规范变体（(12,3) → hub=0/avoid=0/pick=0）。 */
-export function canonicalVariant(tileCount: number, layerLimit: number): DagTVariant {
-  assertDeadlockShape(tileCount, layerLimit);
-  if (tileCount === 12 && layerLimit === 3) {
+/**
+ * 给定 t（=3n）、l 与 dock，返回 dagT 变体族。
+ *  (12, 3) 且 dock ≤ 7 → 24 个 E=10 变体（闭包 8 ≥ dock+1，染色变体表）；
+ *  dock = 7 其余   → 单变体（l=3 定理最优 / l≥4 塔式族，闭包 ≥ 8）；
+ *  dock ≤ 6 或 dock ≥ 8 → 扫帚（broom）通用构造。
+ */
+export function buildDagTVariants(tileCount: number, layerLimit: number, dock = 7): DagTVariant[] {
+  assertDeadlockShape(tileCount, layerLimit, dock);
+  if (tileCount === 12 && layerLimit === 3 && dock <= 7) return minimal12tVariants();
+  if (dock === 7) {
+    if (layerLimit === 3) return [minimalYVariant(tileCount / 3)];
+    return [minimalYDeepVariant(tileCount / 3, layerLimit)];
+  }
+  return [buildBroomVariant(tileCount, layerLimit, dock)];
+}
+
+/** 生成用规范变体（(12,3) 且 dock≤7 → hub=0/avoid=0/pick=0）。 */
+export function canonicalVariant(tileCount: number, layerLimit: number, dock = 7): DagTVariant {
+  assertDeadlockShape(tileCount, layerLimit, dock);
+  if (tileCount === 12 && layerLimit === 3 && dock <= 7) {
     const found = minimal12tVariants().find(v => v.id === '12t3l-h0-a0-p0');
     if (!found) throw new Error('规范变体 12t3l-h0-a0-p0 缺失');
     return found;
   }
-  const variants = buildDagTVariants(tileCount, layerLimit);
+  const variants = buildDagTVariants(tileCount, layerLimit, dock);
   return variants[0];
 }

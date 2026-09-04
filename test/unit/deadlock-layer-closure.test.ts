@@ -201,7 +201,85 @@ test('错误处理：花色不足 / 无包含 / tileCount 非法', () => {
       terrain: buildFixtureTerrain(),
       deadlock: { tileCount: 11 },
     }),
-    /3 的倍数且 ≥ 12/,
+    /3 的倍数且 ≥ 3/,
+  );
+});
+
+// ── dock 参数化（dock=6 ⇒ aabbcc 三色死锁） ──
+
+/** dock=6 扫帚（broom 9t2l）骨架：6 张自由底（色1×2、色2×2、hub×2）+ 3 张层2（各 4 依赖）。 */
+function broom9t2lTerrain(): TerrainData {
+  const depsOf: Record<number, number[]> = {
+    1: [4, 5, 6, 7],      // hub 顶
+    8: [6, 7, 2, 3],      // 色 1 顶
+    9: [4, 5, 2, 3],      // 色 2 顶
+  };
+  const tiles: TerrainTile[] = [];
+  for (let id = 1; id <= 9; id++) {
+    tiles.push({
+      id, layer: 0, dependencies: depsOf[id] ?? [], isConst: false, constElementValue: 0,
+      posX: 10 * id, posY: 100,
+    });
+  }
+  for (const id of [101, 102, 103, 104, 105, 106, 107, 108, 109]) {
+    const deps = id === 107 ? [105] : id === 108 ? [106] : id === 109 ? [107] : [];
+    tiles.push({
+      id, layer: 0, dependencies: deps, isConst: false, constElementValue: 0,
+      posX: 10 * id + 500, posY: 100,
+    });
+  }
+  return { levelResId: 999998, layers: [{ tiles }] };
+}
+
+test('端到端 dock=6：9t2l 扫帚 aabbcc 死锁 + 剩余牌 LayerClosure', () => {
+  const input = {
+    terrain: broom9t2lTerrain(),
+    colorCount: 6,
+    closeRates: [0.3, 0.7],
+    dock: 6,
+    spreadParam: 0.5,
+    rng: mulberry32(1),
+    deadlock: { tileCount: 9, layerLimit: 2 },
+  };
+  const result = runDeadlockLayerClosureGen(input);
+
+  const report = result.deadlock;
+  assert.equal(report.dock, 6);
+  assert.equal(report.tileCount, 9);
+  assert.equal(report.layerLimit, 2);
+  assert.deepEqual(report.deadlockColors, [1, 2, 3], 'dock=6 死锁应恰 3 色（aabbcc）');
+  for (const size of report.closures.values()) assert.ok(size >= 7, `闭包 ${size} 应 ≥ 7`);
+  // 每死锁色恰 3 张
+  assert.deepEqual([...report.assignments.values()].sort((a, b) => a - b),
+    [1, 1, 1, 2, 2, 2, 3, 3, 3]);
+
+  // 剩余牌只用 4/5/6，各 3 张
+  const remaining = new Map<number, number>();
+  for (const [tileId, color] of result.assignments) {
+    if (!report.assignments.has(tileId)) remaining.set(tileId, color);
+  }
+  assert.deepEqual([...remaining.values()].sort((a, b) => a - b), [4, 4, 4, 5, 5, 5, 6, 6, 6]);
+
+  // 整局在 dock=6 语义下纯玩法不可通关
+  const game = createGame({
+    terrainTiles: input.terrain.layers.flatMap(l => l.tiles),
+    elementValues: result.assignments,
+    levelResId: input.terrain.levelResId,
+  });
+  game.dockSlotBonus = -1; // 测试通道：dock 7 → 6
+  const solved = solveDFS(game, { maxStates: 5_000_000, timeoutMs: 30_000 });
+  assert.equal(solved.win, false, 'dock=6 死锁局应无通关序');
+});
+
+test('错误处理：dock<3 报错', () => {
+  assert.throws(
+    () => runDeadlockLayerClosureGen({
+      ...CLOSURE_INPUT,
+      terrain: buildFixtureTerrain(),
+      dock: 2,
+      deadlock: { tileCount: 12, layerLimit: 3 },
+    }),
+    /dock 2 < 3/,
   );
 });
 

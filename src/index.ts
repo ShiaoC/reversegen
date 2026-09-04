@@ -397,6 +397,7 @@ export type {
   DeadlockLayerClosureOutput,
 } from './deadlock-layer-closure-gen.js';
 export {
+  buildBroomVariant,
   buildDagTVariants,
   canonicalVariant,
   minimal12tVariants,
@@ -404,7 +405,7 @@ export {
   minimalYDeepVariant,
   minimalEdgeCount3L,
 } from './deadlock/family.js';
-export { colorClosures, isGuaranteedDead, coreMeetsThreshold } from './deadlock/closures.js';
+export { colorClosures, isGuaranteedDead, coreMeetsThreshold, closureThresholdForDock } from './deadlock/closures.js';
 export { searchDeadlockCores, searchGenericCoresImpl, verifyFullEmbedding } from './deadlock/search.js';
 export { selectDeadlockEmbedding } from './deadlock/selection.js';
 export { DEADLOCK_CLOSURE_THRESHOLD, DEADLOCK_EXCLUDED_EXTRA_ENUMS } from './deadlock/types.js';

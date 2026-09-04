@@ -120,14 +120,17 @@ OPTIONS:
 
   Deadlock + LayerClosure 算法参数 (-a deadlock-layer-closure):
     沿用 closure 全部参数（--close-rates / --dock / --spread / --debt-persistence），另加：
-    --deadlock-tiles <n>    死锁 tile 数 t（3 的倍数，t/3=花色数 ≥4，默认 12）
-    --deadlock-layers <n>   死锁 dagT 层数限制 l（≥3，默认 3）
+    --deadlock-tiles <n>    死锁 tile 数 t（3 的倍数，t/3=花色数 ≥ ⌈dock/2⌉，默认 12）
+    --deadlock-layers <n>   死锁 dagT 层数限制 l（默认 3）
     --deadlock-depth-pref <v>   多包含时深度偏好: deepest | shallowest | neutral (默认)
     --deadlock-density-pref <v> 多包含时密度偏好: densest | sparsest | neutral (默认)
     --deadlock-selection-seed <n> 同分破平种子 (默认 0)
     --deadlock-search-limit <n>   骨架收集上限 (0=默认 256，带种子随机序取前 n)
     --deadlock-enumeration-seed <n> 枚举顺序种子 (默认 0)
     --deadlock-preference-strength <0-1> 偏好强度 (0=近均匀 1=近严格排序, 默认 0.5)
+    注：--dock 驱动死锁闭包阈值 dock+1。dock=7 走经典 12t3l 24 变体族；
+        dock≠7 走扫帚(broom)通用族 —— 如 dock=6 ⇒ 9t2l/aabbcc 三色死锁。层数
+        下限：dock≤6 为 2，dock=7..10 为 3，dock=11..14 为 4。
 
   Tile Explorer 算法参数 (-a tile-explorer):
     --te-strategy <name>   default / top_two_easy / sliding_window / limit_layer_random /
@@ -492,12 +495,13 @@ try {
 
     const deadlockTiles = parseInt(values['deadlock-tiles']!, 10);
     const deadlockLayers = parseInt(values['deadlock-layers']!, 10);
-    if (!Number.isInteger(deadlockTiles) || deadlockTiles % 3 !== 0 || deadlockTiles < 12) {
-      console.error('Error: --deadlock-tiles must be a multiple of 3 and >= 12');
+    // dock 相关精确下限（花色数 ≥ ⌈dock/2⌉、层数 ≥ 2）由生成器按 dock 校验
+    if (!Number.isInteger(deadlockTiles) || deadlockTiles % 3 !== 0 || deadlockTiles < 6) {
+      console.error('Error: --deadlock-tiles must be a multiple of 3 and >= 6');
       process.exit(1);
     }
-    if (!Number.isInteger(deadlockLayers) || deadlockLayers < 3) {
-      console.error('Error: --deadlock-layers must be >= 3');
+    if (!Number.isInteger(deadlockLayers) || deadlockLayers < 2) {
+      console.error('Error: --deadlock-layers must be >= 2');
       process.exit(1);
     }
     const depthPref = values['deadlock-depth-pref']!;
@@ -565,6 +569,7 @@ try {
           variantId: report.variantId,
           tileCount: report.tileCount,
           layerLimit: report.layerLimit,
+          dock: report.dock,
           deadlockColors: report.deadlockColors,
           mapping: mappingObj,
           assignments: deadlockAssignmentsObj,

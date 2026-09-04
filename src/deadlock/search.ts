@@ -58,6 +58,8 @@ export interface ContainmentSearchOptions {
   guide?: DepthPreference | DensityPreference;
   /** 引导强度 = 非首位候选的相对权重（几何衰减）。默认 0.5，范围 (0,1)。 */
   guideBias?: number;
+  /** 游戏 Dock 槽位容量：闭包阈值 = dock + 1。默认 7。 */
+  dock?: number;
 }
 
 /** Fisher–Yates 洗牌（rng 决定顺序，确定性）。 */
@@ -123,10 +125,11 @@ export function searchDeadlockCores(
   if (candidateTiles.length < variant.nodes.length) return [];
   const rng = mulberry32(opts.enumerationSeed ?? 0);
   const limit = Math.max(1, opts.searchLimit ?? 256);
+  const dock = Math.max(3, opts.dock ?? 7);
   if (variant.tileCount === 12 && variant.layerLimit === 3 && isCanonical12tShape(variant)) {
-    return searchCanonicalJoin(input, limit, rng, opts.guide, opts.guideBias);
+    return searchCanonicalJoin(input, limit, rng, opts.guide, opts.guideBias, dock);
   }
-  return searchGenericCoresImpl(input, limit, rng);
+  return searchGenericCoresImpl(input, limit, rng, dock);
 }
 
 /** 结构自检：12 节点 / 3 层 / 单 4 依赖枢纽 + 单 1 依赖枢纽 + 两个 2 依赖 cap + 单 1 依赖 cap + 双 wildcard。 */
@@ -288,6 +291,7 @@ function searchCanonicalJoin(
   rng: () => number = mulberry32(0),
   guide?: DepthPreference | DensityPreference,
   guideBias?: number,
+  dock = 7,
 ): DeadlockCoreMatch[] {
   const { variant, candidateTiles, depsOf, descendants, ancestors } = input;
   const plan = buildRolePlan(variant);
@@ -372,7 +376,7 @@ function searchCanonicalJoin(
     let verifiedPair: [number, number] | null = null;
     for (const color of plan.coreNodesOfColor.keys()) {
       const ownWC = wildcardNodes.filter(n => plan.colorOfNode.get(n) === color).length;
-      const deficit = 8 - (closures.get(color) ?? 0) - ownWC;
+      const deficit = (dock + 1) - (closures.get(color) ?? 0) - ownWC;
       if (deficit > 0) needsGrowth.push(color);
     }
     if (needsGrowth.length > 0) {
@@ -399,7 +403,7 @@ function searchCanonicalJoin(
         }
         const full = colorClosures({ chosenIds: chosen, depsOf, colorOf });
         for (const size of full.values()) {
-          if (size < 8) return false;
+          if (size < dock + 1) return false;
         }
         return true;
       };
@@ -856,6 +860,7 @@ export function searchGenericCoresImpl(
   input: ContainmentSearchInput,
   limit: number,
   rng: () => number = mulberry32(0),
+  dock = 7,
 ): DeadlockCoreMatch[] {
   const { variant, candidateTiles, depsOf, descendants, ancestors } = input;
 
@@ -1099,7 +1104,7 @@ export function searchGenericCoresImpl(
       const coreColorOf = new Map<number, number>();
       for (const [nodeId, tileId] of chosen) coreColorOf.set(tileId, nodeById.get(nodeId)!.color);
       const closures = colorClosures({ chosenIds: chosenSet, depsOf, colorOf: coreColorOf });
-      if (!coreMeetsThreshold(closures, wildcardColorCounts)) return;
+      if (!coreMeetsThreshold(closures, wildcardColorCounts, dock)) return;
       seenSets.add(setKey);
       matches.push({
         variantId: variant.id,
@@ -1139,10 +1144,11 @@ export function verifyFullEmbedding(
   chosenIds: Set<number>,
   colorOf: Map<number, number>,
   depsOf: Map<number, number[]>,
+  dock = 7,
 ): Map<number, number> {
   const closures = colorClosures({ chosenIds, depsOf, colorOf });
   for (const size of closures.values()) {
-    if (size < 8) throw new Error(`死锁闭包验证失败: min(${[...closures.values()]}) < 8`);
+    if (size < dock + 1) throw new Error(`死锁闭包验证失败: min(${[...closures.values()]}) < ${dock + 1}`);
   }
   return closures;
 }

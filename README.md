@@ -50,6 +50,12 @@ npx tsx cli/generate.ts \
   --deadlock-tiles 12 --deadlock-layers 3 \
   --deadlock-depth-pref deepest --deadlock-density-pref densest
 
+# dock 参数化死锁：--dock 6 ⇒ 9t2l/aabbcc 三色死锁（闭包阈值 dock+1）
+npx tsx cli/generate.ts \
+  --terrain /path/to/100075.json --algorithm deadlock-layer-closure \
+  --close-rates 0.3,0.5 --colors 6 --dock 6 \
+  --deadlock-tiles 9 --deadlock-layers 2
+
 # 仅输出 ReplayCode（可管道）
 npx tsx cli/generate.ts -t level.json -c 3,3,2 -k 6 -q | pbcopy
 

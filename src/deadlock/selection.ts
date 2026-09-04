@@ -29,6 +29,8 @@ export interface SelectionContext {
   densityPreference: DensityPreference;
   /** 同分破平种子 */
   selectionSeed: number;
+  /** 游戏 Dock 容量（闭包阈值 = dock+1）。默认 7。 */
+  dock?: number;
 }
 
 interface ScoredCandidate {
@@ -69,6 +71,7 @@ export function selectDeadlockEmbedding(
   ctx: SelectionContext,
 ): DeadlockEmbedding | null {
   const { depthById, posById, depthPreference, densityPreference, selectionSeed } = ctx;
+  const dock = Math.max(3, ctx.dock ?? 7);
 
   const nodeById = new Map(variant.nodes.map(n => [n.id, n]));
 
@@ -94,7 +97,7 @@ export function selectDeadlockEmbedding(
     }
     let closures: Map<number, number>;
     try {
-      closures = verifyFullEmbedding(chosenIds, colorOf, depsOf);
+      closures = verifyFullEmbedding(chosenIds, colorOf, depsOf, dock);
     } catch {
       return false;
     }

@@ -104,10 +104,16 @@ export function runDeadlockLayerClosureGen(input: DeadlockLayerClosureInput): De
   const preferenceStrength = Math.max(0, Math.min(1, spec.preferenceStrength ?? 0.5));
 
   // ── 1. 校验 ──
-  if (!Number.isInteger(n) || n < 4) {
-    throw new Error(`deadlock tileCount ${t} 无效：须为 3 的倍数且 ≥ 12（每色 3 张、≥4 色）`);
+  if (dock < 3) throw new Error(`dock ${dock} < 3：槽位过小不可能死（每色 ≤2 时可凑三消）`);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`deadlock tileCount ${t} 无效：须为 3 的倍数且 ≥ 3`);
   }
-  if (l < 3) throw new Error(`deadlock layerLimit ${l} 无效：必死 DAG 至少 3 层`);
+  const minColors = Math.ceil(dock / 2);
+  if (n < minColors) {
+    throw new Error(
+      `deadlock 花色数 ${n} < ${minColors}：dock=${dock} 下第 ${dock} 张入槽死亡需要至少 ${minColors} 色`,
+    );
+  }
   const remainingColorCount = colorCount - n;
   if (remainingColorCount < 1) {
     throw new Error(`花色数 ${colorCount} 不足：死锁占 ${n} 色，剩余牌至少需要 1 色`);
@@ -142,8 +148,8 @@ export function runDeadlockLayerClosureGen(input: DeadlockLayerClosureInput): De
     for (const d of desc) ancestors.get(d)!.add(id);
   }
 
-  // ── 3. 模板族（规范变体：染色依据变体表） ──
-  const variant = canonicalVariant(t, l);
+  // ── 3. 模板族（规范变体：染色依据变体表；dock 驱动闭包阈值与构造） ──
+  const variant = canonicalVariant(t, l, dock);
 
   // ── 4. 可达包含搜索（结构口径 + 闭包必要性剪枝） ──
   const depthById = computeDependencyDepth(allTiles, tileMap);
@@ -159,10 +165,11 @@ export function runDeadlockLayerClosureGen(input: DeadlockLayerClosureInput): De
     enumerationSeed,
     guide: depthPreference !== 'neutral' ? depthPreference : densityPreference,
     guideBias: preferenceStrengthToBias(preferenceStrength),
+    dock,
   });
   if (cores.length === 0) {
     throw new Error(
-      `未在地形中找到 ${t}t${l}l 最小 dagT（${variant.id}）的可达包含；`
+      `未在地形中找到 ${t}t${l}l/dock${dock} 最小 dagT（${variant.id}）的可达包含；`
       + `请换地形或调整 deadlock.tileCount / layerLimit`,
     );
   }
@@ -174,6 +181,7 @@ export function runDeadlockLayerClosureGen(input: DeadlockLayerClosureInput): De
     depthPreference,
     densityPreference,
     selectionSeed,
+    dock,
   };
   const embedding = selectDeadlockEmbedding(variant, cores, depsOf, selectionCtx);
   if (!embedding) {
@@ -294,6 +302,7 @@ export function runDeadlockLayerClosureGen(input: DeadlockLayerClosureInput): De
     variantId: variant.id,
     tileCount: t,
     layerLimit: l,
+    dock,
     deadlockColors: Array.from({ length: n }, (_, i) => i + 1),
     mapping: new Map(embedding.mapping),
     assignments: new Map(deadlockAssignments),

@@ -857,7 +857,7 @@ var PARAM_HELP={
   targetStd:{title:'Cost 起伏强度（σ）',copy:'只在点击骰子自动生成 Cost 数组时使用，不直接参与最终牌局计算。',effect:'数值小，步骤较平；数值大，高低起伏更明显。'},
   closeRates:{title:'层闭合率',copy:'到达某个依赖深度时，累计已有多少比例的牌能组成完整三张；最后一层自动补到 100%。',effect:'同一层数下，闭合率高通常更容易及时消除，低则更容易留下散牌。'},
   mechanics:{title:'特殊机制',copy:'机制挂件清单，格式为 枚举:数量，逗号分隔（如 31:3,39:2）。与 ReplayCode 并列组成完整一关：装载时由确定性分配器按策略/白名单把挂件分配到非固定牌上（对齐 Unity extraConfig），地形 tile 里预置的挂件会参与白名单互斥。',effect:'31=彩色魔药（三消后按花色交错清除 6 组牌）；39=泡泡（吸取玩法，数量是每轮收集数，0=随机 2-3）。',caution:'数量是分配请求而非校验对象：固定花色挂件（魔药/蒲公英/礼盒/金币等）自动取 3 的倍数；202/207 忽略数量（自动）；泡泡 39 是行为参数不参与分配。'},
-  dock:{title:'Dock 容量',copy:'卡槽能暂存的牌数，只参与暴露债务、OI 等分析指标，不改变花色如何摆放。',caution:'应与实际游戏规则保持一致。'},
+  dock:{title:'Dock 容量',copy:'卡槽能暂存的牌数。普通 closure 仅参与暴露债务、OI 等分析指标；Deadlock+Closure 算法中同时驱动死锁闭包阈值（dock+1）与模板族：dock=7 走经典 12t3l，dock≠7 走扫帚(broom)族，如 dock=6 ⇒ aabbcc 三色死锁。',caution:'应与实际游戏规则保持一致。'},
   colorCount:{title:'花色数',copy:'本局使用多少种图案。',effect:'花色多时通常更容易同时积攒多种散牌，但最终难度还受地形和其他参数影响。'},
   colorAllocation:{title:'花色配额',copy:'“均匀分配”让各花色牌量接近；“单色极重”让一个主色占较多牌，其他颜色较少。'},
   heavyColorRatio:{title:'主色目标占比',copy:'仅在“单色极重”时生效。生成器先按“自由牌数÷3”的最大花色数完成落位，再从全局完整三元组中随机选主色组和锚点花色，逐组随机替换。',effect:'只保证主色目标、最终总花色数和三倍数；改色后的闭合率不要求继续命中。'},
@@ -2042,7 +2042,7 @@ function showClosure(d){
 function showDeadlockClosure(d){
   showClosure(d);
   var rep=d.deadlock||{};
-  document.getElementById('chartTitle').textContent='闭合率（死锁牌排除口径）· 死锁 '+rep.tileCount+'t'+rep.layerLimit+'l';
+  document.getElementById('chartTitle').textContent='闭合率（死锁牌排除口径）· 死锁 '+rep.tileCount+'t'+rep.layerLimit+'l · dock '+rep.dock;
   var sec=document.getElementById('stepSection');
   sec.style.display='';
   var closureObj=rep.closures||{};
@@ -2062,7 +2062,7 @@ function showDeadlockClosure(d){
   }).join('');
   sec.innerHTML=
     '<div class="panel-hd">死锁报告 <span style="font-weight:400;font-size:9px;color:var(--dim);margin-left:4px">'
-    +rep.variantId+' · 花色['+(rep.deadlockColors||[]).join(',')+'] · 深度得分 '+Number(rep.depthScore||0).toFixed(2)
+    +rep.variantId+' · dock '+rep.dock+' · 花色['+(rep.deadlockColors||[]).join(',')+'] · 深度得分 '+Number(rep.depthScore||0).toFixed(2)
     +' · 密度得分 '+Math.round(rep.densityScore||0)+' · 剩余 '+(rep.remainingTileCount||0)+'张/'+(rep.remainingColorCount||0)+'色</span></div>'
     +'<div class="panel-bd" style="padding:0"><div class="tbl-outer" style="border:none;border-radius:0;max-height:260px"><table>'
     +'<thead><tr><th>模板角色</th><th>地形牌</th><th>花色</th><th>备注</th></tr></thead>'

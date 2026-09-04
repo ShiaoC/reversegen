@@ -121,9 +121,10 @@ export interface DeadlockEmbedding {
 export interface DeadlockReport {
   /** 使用的模板变体 id */
   variantId: string;
-  /** t / l（回显） */
+  /** t / l / dock（回显；dock = 游戏槽位，闭包阈值 = dock+1） */
   tileCount: number;
   layerLimit: number;
+  dock: number;
   /** 死锁花色实际值（1..n） */
   deadlockColors: number[];
   /** templateNodeId → terrainTileId */
