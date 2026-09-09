@@ -3303,6 +3303,29 @@ document.addEventListener('keydown',function(e){
 // ═══════════════════════════════════
 //  Init
 // ═══════════════════════════════════
+async function loadLevelFromHost(levelId){
+  var normalized=String(levelId==null?'':levelId).trim();
+  if(!/^\d+$/.test(normalized)||Number(normalized)<=0)return false;
+  await initDefaultLevelsDir();
+  document.getElementById('levelId').value=normalized;
+  document.getElementById('levelId').dispatchEvent(new Event('input',{bubbles:true}));
+  var loaded=await loadLevel();
+  if(loaded)toast('已从管理平台载入关卡 #'+normalized,'ok');
+  return loaded;
+}
+
+window.addEventListener('message',async function(event){
+  if(event.source!==window.parent)return;
+  var data=event.data;
+  if(!data||data.type!=='reversegen:load-level')return;
+  var ok=await loadLevelFromHost(data.levelId);
+  event.source.postMessage({
+    type:'reversegen:load-level-result',
+    levelId:Number(data.levelId)||null,
+    ok:ok
+  },event.origin);
+});
+
 appFetch('/api/mechanics')
   .then(function(response){return response.json()})
   .then(function(v){if(v&&v.ok)S.mechanicCatalog=v.mechanics})
@@ -3313,7 +3336,11 @@ updateGenerationParamSummary();
 restoreParams();
 updateSpreadLabel();
 updateDebtLabel();
-initDefaultLevelsDir();
+initDefaultLevelsDir().then(function(){
+  var initialLevelId=new URLSearchParams(window.location.search).get('levelId');
+  if(initialLevelId)loadLevelFromHost(initialLevelId);
+});
+if(window.parent!==window)window.parent.postMessage({type:'reversegen:ready'},'*');
 </script>
 </body>
 </html>
