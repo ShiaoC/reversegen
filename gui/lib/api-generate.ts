@@ -30,10 +30,11 @@ import {
   MECHANIC_SEED_SALTS,
 } from '../../src/index.js';
 import type { TerrainTile } from '../../src/index.js';
-import { generateReplayFromExternalInput } from '../../src/external-generation.js';
+import { generateExternalReplayApiResponse } from '../../src/external-generation.js';
 import { MAX_DOCK_SLOTS } from '../../src/constants.js';
 import {
   defaultLevelsDir,
+  APP_VERSION,
   findTerrainByLevelHash,
   listLevels,
   resolveTerrainPath,
@@ -72,10 +73,10 @@ export async function handleExternalGenerateReplay(req: IncomingMessage, res: Se
       if (typeof parameterString !== 'string' || !parameterString.trim()) {
         throw new Error('parameterString 不能为空');
       }
-      const result = generateReplayFromExternalInput({
+      const result = generateExternalReplayApiResponse({
         parameterString,
         terrain: terrain ?? terrainJson,
-      });
+      }, APP_VERSION);
       json(res, { ok: true, ...result });
     } catch (error) {
       json(res, {

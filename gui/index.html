@@ -823,6 +823,8 @@ appFetch('/api/runtime-config')
 var S={
   level:null,
   terrainPath:null,
+  hostLevelIdentity:null,
+  hostTerrainValidation:null,
   localLevelFiles:null,
   result:null,
   sims:[],
@@ -831,8 +833,44 @@ var S={
   mechanicCatalog:null,
 };
 
+function setExperienceDirty(dirty,reason){
+  var bridge=window.reverseGenExperienceBridge;
+  if(bridge&&typeof bridge.setDirty==='function')bridge.setDirty(dirty,reason);
+}
+
+function publishExperienceCandidate(result){
+  var bridge=window.reverseGenExperienceBridge;
+  if(!bridge||typeof bridge.publishCandidate!=='function'||!result||!result.replayCode)return;
+  var levelId=S.level&&S.level.levelResId!=null?Number(S.level.levelResId):null;
+  var levelIdentity=S.hostLevelIdentity||{
+    levelId:levelId,
+    source:'local',
+    revision:'local-session',
+    hash:String(result.levelHash||(S.level&&S.level.levelHash)||'').toLowerCase(),
+  };
+  var metrics=Object.assign({},result.metrics||{}, {
+    elementCount:result.elementCount==null?null:Number(result.elementCount),
+    totalSteps:result.totalSteps==null?null:Number(result.totalSteps),
+    matchRate:result.matchRate==null?null:Number(result.matchRate),
+  });
+  bridge.publishCandidate({
+    replayCode:String(result.replayCode),
+    generator:{name:String(result.algorithm||S.algo||'unknown')},
+    parameterSummary:{
+      algorithm:String(result.algorithm||S.algo||'unknown'),
+      levelId:levelId,
+      serialized:updateGenerationParamSummary(),
+    },
+    metrics:metrics,
+    levelIdentity:levelIdentity,
+  }).catch(function(error){
+    console.warn('[experience-v2] candidate publish failed',error);
+  });
+}
+
 // ── 请求竞态控制：新请求开始时中止旧请求（切换算法/重新生成不会旧响应覆盖新结果） ──
 var _activeAbort=null;
+var _loadingHostTerrain=false;
 function beginRequest(){
   if(_activeAbort)_activeAbort.abort();
   var c=new AbortController();
@@ -1230,6 +1268,7 @@ async function loadTerrainFile(file){
 //  Load level
 // ═══════════════════════════════════
 async function loadLevel(source){
+  if(!_loadingHostTerrain){S.hostLevelIdentity=null;S.hostTerrainValidation=null}
   var id=document.getElementById('levelId').value.trim();
   if(!source&&!id){toast('请输入关卡 ID，或选择关卡文件','err');return false}
   if(!source&&S.localLevelFiles){
@@ -1792,10 +1831,14 @@ async function copyGenerationParams(){
 
 var GENERATION_PARAM_INPUTS='#levelId,#levelsDir,#dock,#colorCount,#colorAllocation,#heavyColorMaxRatio,#spreadParam,#debtPersistence,#targetStd,#costArray,#closeRateSliders .slider,#panelDeadlock input,#panelDeadlock select,#panelTileExplorer input,#panelTileExplorer select,#panelTileExplorer textarea,#panelZenMatch input,#panelZenMatch select,#mechanics';
 document.addEventListener('input',function(event){
-  if(event.target&&event.target.matches&&event.target.matches(GENERATION_PARAM_INPUTS)){updateGenerationParamSummary();saveParamsDebounced()}
+  if(event.target&&event.target.matches&&event.target.matches(GENERATION_PARAM_INPUTS)){
+    updateGenerationParamSummary();saveParamsDebounced();setExperienceDirty(true,'parameters-changed')
+  }
 });
 document.addEventListener('change',function(event){
-  if(event.target&&event.target.matches&&event.target.matches(GENERATION_PARAM_INPUTS)){updateGenerationParamSummary();saveParamsDebounced()}
+  if(event.target&&event.target.matches&&event.target.matches(GENERATION_PARAM_INPUTS)){
+    updateGenerationParamSummary();saveParamsDebounced();setExperienceDirty(true,'parameters-changed')
+  }
 });
 
 // ═══════════════════════════════════════
@@ -1832,7 +1875,7 @@ function restoreParams(){
       var el=document.querySelector(sel);
       if(el)el.value=data.values[sel];
     });
-    if(data.algo)switchAlgo(data.algo);
+    if(data.algo)switchAlgo(data.algo,{silentDirty:true});
     if(data.terrainPath){
       loadLevel({terrainPath:data.terrainPath});
     }
@@ -1842,7 +1885,7 @@ function restoreParams(){
 // ═══════════════════════════════════
 //  Algorithm switch
 // ═══════════════════════════════════
-function switchAlgo(algo){
+function switchAlgo(algo,options){
   if(_activeAbort)_activeAbort.abort();
   S.algo=algo;
   document.querySelectorAll('#algoTabs .tab').forEach(function(t){t.classList.toggle('active',t.dataset.algo===algo)});
@@ -1855,6 +1898,7 @@ function switchAlgo(algo){
   validateParams();
   updateGenerationParamSummary();
   saveParamsDebounced();
+  if(!options||options.silentDirty!==true)setExperienceDirty(true,'algorithm-changed');
 }
 
 // ═══════════════════════════════════
@@ -1905,6 +1949,10 @@ function validateMechanicsInput(){
 async function generate(){
   var btn=document.getElementById('btnGen');
   if(!S.level){toast('请先加载关卡','err');return}
+  if(S.hostTerrainValidation&&S.hostTerrainValidation.ok===false){
+    setMsg(document.getElementById('genErr'),'管理平台地形身份校验未通过，已阻止生成','err');
+    toast('地形身份校验未通过','err');return
+  }
   var body=collectGenerationParams();
   var singleHeavy=document.getElementById('colorAllocation').value==='single-heavy';
   var compatibility=inspectTerrainCompatibility(body,S.level);
@@ -1926,7 +1974,7 @@ async function generate(){
     document.getElementById('simHistory').innerHTML='';
     document.getElementById('emptyState').style.display='none';
     document.getElementById('verifyEmpty').style.display='none';
-    showResult(d);showVerify(d);
+    showResult(d);showVerify(d);publishExperienceCandidate(d);
     toast(singleHeavy?'单色极重牌局生成成功':'牌局生成成功','ok');
     document.getElementById('resultCard').scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){if(e.name!=='AbortError')setMsg(document.getElementById('genErr'),e.message,'err')}
@@ -2983,6 +3031,9 @@ async function runReplaySearch(){
   var btn=document.getElementById('btnReplaySearch'),out=document.getElementById('replaySearchResult');
   if(replaySearchRunning){if(_activeAbort)_activeAbort.abort();return}
   if(!S.level){toast('请先加载关卡','err');return}
+  if(S.hostTerrainValidation&&S.hostTerrainValidation.ok===false){
+    setMsg(out,'管理平台地形身份校验未通过，已阻止生成','err');return
+  }
   var target=parseInt(document.getElementById('replaySearchGrade').value,10);
   var maxAttempts=parseInt(document.getElementById('replaySearchAttempts').value,10);
   var remainingRatioLimit=readGradeRemainingRatioLimit(out);
@@ -3031,7 +3082,7 @@ async function runReplaySearch(){
       document.getElementById('simHistory').innerHTML='';
       document.getElementById('emptyState').style.display='none';
       document.getElementById('verifyEmpty').style.display='none';
-      showResult(generated);showVerify(generated);
+      showResult(generated);showVerify(generated);publishExperienceCandidate(generated);
       document.getElementById('selectionGrade').value=String(target);
       document.getElementById('selectionHint').textContent='Replay 检索命中 G'+target+'，已自动填入';
       S.selectionPassrate=evaluation.grade.passrate||0;
@@ -3180,6 +3231,7 @@ function finishExperienceRequest(requestId,result){
   pending.button.textContent=pending.idleText;
   delete pendingExperienceRequests[requestId];
   if(result.ok){
+    setExperienceDirty(false,'experience-package-saved');
     toast(result.levelResId?'关卡 '+result.levelResId+' 已设为实际体验':'已设为实际体验','ok');
   }else{
     toast(result.error||'设定实际体验失败','err');
@@ -3211,6 +3263,7 @@ function setCurrentReplayAsExperience(){
   };
   window.parent.postMessage({
     type:'reversegen:set-experience-package',
+    protocolVersion:2,
     requestId:requestId,
     replayCode:replayCode,
   },origin);
@@ -3241,6 +3294,7 @@ function generateCurrentParamsAsExperience(){
   };
   window.parent.postMessage({
     type:'reversegen:generate-experience-package',
+    protocolVersion:2,
     requestId:requestId,
     levelResId:levelResId,
     parameterString:parameterString,
@@ -3314,17 +3368,80 @@ async function loadLevelFromHost(levelId){
   return loaded;
 }
 
-window.addEventListener('message',async function(event){
-  if(event.source!==window.parent)return;
-  var data=event.data;
-  if(!data||data.type!=='reversegen:load-level')return;
-  var ok=await loadLevelFromHost(data.levelId);
-  event.source.postMessage({
-    type:'reversegen:load-level-result',
-    levelId:Number(data.levelId)||null,
-    ok:ok
-  },event.origin);
-});
+async function loadTerrainFromHostV2(input){
+  var identity=input.levelIdentity;
+  var terrainJson=String(input.terrainJson||'');
+  if(!terrainJson.trim())throw new Error('管理平台地形 JSON 不能为空');
+  var parsed;
+  try{parsed=JSON.parse(terrainJson)}catch(e){throw new Error('管理平台地形 JSON 无法解析')}
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('管理平台地形 JSON 必须是对象');
+
+  var identityLevelId=identity.levelId==null?null:Number(identity.levelId);
+  var terrainLevelId=Number(parsed.levelResId==null?parsed.LevelResId:parsed.levelResId);
+  var fileLevelId=Number.isSafeInteger(identityLevelId)&&identityLevelId>0
+    ?identityLevelId
+    :(Number.isSafeInteger(terrainLevelId)&&terrainLevelId>0?terrainLevelId:'snapshot');
+  var upload=await appFetch('/api/terrain-upload',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({fileName:'platform-'+fileLevelId+'.json',terrainJson:terrainJson})
+  });
+  var uploaded=await upload.json();
+  if(!uploaded.ok)throw new Error(uploaded.error||'精确地形快照上传失败');
+  _loadingHostTerrain=true;
+  var loaded;
+  try{loaded=await loadLevel({terrainPath:uploaded.resolvedPath})}
+  finally{_loadingHostTerrain=false}
+  if(!loaded||!S.level)throw new Error('精确地形快照载入失败');
+
+  var actualLevelId=Number(S.level.levelResId)||null;
+  var actualHash=String(S.level.levelHash||'').trim().toLowerCase();
+  var expectedHash=String(identity.hash||'').trim().toLowerCase();
+  var levelIdMatches=identityLevelId==null||identityLevelId===actualLevelId;
+  var levelHashPresent=actualHash!==''&&actualHash!=='(none)';
+  var levelHashMatches=levelHashPresent&&actualHash===expectedHash;
+  var errors=[];
+  if(!levelIdMatches)errors.push('地形 JSON 的 levelResId 与 levelIdentity.levelId 不一致');
+  if(!levelHashPresent)errors.push('地形 JSON 缺少可验证的 LevelHash');
+  else if(!levelHashMatches)errors.push('地形 JSON 的 LevelHash 与 levelIdentity.hash 不一致');
+  var validation={
+    ok:errors.length===0,
+    checks:{
+      exactTerrainJson:true,
+      levelIdMatches:levelIdMatches,
+      levelHashPresent:levelHashPresent,
+      levelHashMatches:levelHashMatches,
+    },
+    warnings:[],
+    errors:errors,
+  };
+  S.hostLevelIdentity={
+    levelId:actualLevelId,
+    source:String(identity.source),
+    revision:String(identity.revision),
+    hash:expectedHash,
+    actualHash:actualHash,
+    contentHash:String(input.contentHash||''),
+  };
+  S.hostTerrainValidation=validation;
+  document.getElementById('terrainFileName').textContent=String(identity.source)+' @ '+String(identity.revision);
+  if(validation.ok)toast('已载入管理平台精确地形 #'+(actualLevelId||fileLevelId),'ok');
+  else toast(errors.join('；'),'err');
+  return{actualHash:actualHash,validation:validation};
+}
+
+window.reverseGenExperienceHost={
+  getRuntimeConfig:async function(){
+    var response=await appFetch('/api/runtime-config');
+    if(!response.ok)throw new Error('无法读取 ReverseGen 运行版本');
+    return response.json();
+  },
+  loadTerrain:loadTerrainFromHostV2,
+  loadLegacyLevel:async function(levelId){
+    S.hostLevelIdentity=null;S.hostTerrainValidation=null;
+    var ok=await loadLevelFromHost(levelId);
+    return{ok:ok,actualHash:ok&&S.level?String(S.level.levelHash||''):''};
+  },
+};
 
 appFetch('/api/mechanics')
   .then(function(response){return response.json()})
@@ -3340,7 +3457,7 @@ initDefaultLevelsDir().then(function(){
   var initialLevelId=new URLSearchParams(window.location.search).get('levelId');
   if(initialLevelId)loadLevelFromHost(initialLevelId);
 });
-if(window.parent!==window)window.parent.postMessage({type:'reversegen:ready'},'*');
 </script>
+<script type="module" src="reversegen-experience-v2.js"></script>
 </body>
 </html>

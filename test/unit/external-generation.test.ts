@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   decodeGenerationParameterString,
+  generateExternalReplayApiResponse,
   generateReplayFromExternalInput,
 } from '../../src/external-generation.js';
 import { decodeFromString, LogLevel, setLogLevel } from '../../src/index.js';
@@ -66,6 +68,32 @@ describe('external Replay generation API core', () => {
     assert.equal(result.elementCount, 8);
     assert.equal(replay?.instanceArray.length, 84);
     assert.equal(replay?.elementCount, 8);
+  });
+
+  it('builds the versioned external API response with hashes and validation summary', () => {
+    const terrainWithHash = {
+      ...terrainObject,
+      LevelHash: '0123456789abcdef',
+    };
+    const response = generateExternalReplayApiResponse({
+      parameterString: closureParameterString,
+      terrain: terrainWithHash,
+    }, '2.5.0');
+
+    assert.equal(response.generatorVersion, '2.5.0');
+    assert.equal(
+      response.parameterHash,
+      createHash('sha256').update(closureParameterString, 'utf8').digest('hex'),
+    );
+    assert.equal(response.levelHash, '0123456789abcdef');
+    assert.equal(response.validation.ok, true);
+    assert.deepEqual(response.validation.checks, {
+      parametersParsed: true,
+      terrainValidated: true,
+      replayCodeDecoded: true,
+      levelHashMatched: true,
+    });
+    assert.deepEqual(response.validation.errors, []);
   });
 
   it('decodes the current positional Zen Match copy format', () => {
