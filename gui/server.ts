@@ -162,6 +162,9 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/runtime-config' && req.method === 'GET') {
     json(res, {
       ok: true,
+      app: APP_NAME,
+      appVersion: APP_VERSION,
+      experienceProtocolVersion: 2,
       surface: appSurface,
       basePath: appBasePath,
     });
@@ -232,7 +235,11 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (appSurface === 'generator') {
-    if (url.pathname === '/reversegen-theme.js' || url.pathname === '/reversegen-theme.css') {
+    if (
+      url.pathname === '/reversegen-theme.js'
+      || url.pathname === '/reversegen-theme.css'
+      || url.pathname === '/reversegen-experience-v2.js'
+    ) {
       serveStatic(res, join(GUI_DIR, url.pathname));
       return;
     }

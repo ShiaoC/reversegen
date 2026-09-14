@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
   decodeFromString,
+  formatHash,
   generateBoard,
   generateBoardLayerClosure,
   generateBoardTileExplorer,
@@ -28,6 +30,24 @@ export interface ExternalReplayGenerationOutput {
   levelResId?: number;
   elementCount: number;
   levelHash: string;
+}
+
+export interface ExternalGenerationValidationSummary {
+  ok: boolean;
+  checks: {
+    parametersParsed: boolean;
+    terrainValidated: boolean;
+    replayCodeDecoded: boolean;
+    levelHashMatched: boolean | null;
+  };
+  warnings: string[];
+  errors: string[];
+}
+
+export interface ExternalReplayApiResponse extends ExternalReplayGenerationOutput {
+  generatorVersion: string;
+  parameterHash: string;
+  validation: ExternalGenerationValidationSummary;
 }
 
 function requiredText(value: unknown, name: string): string {
@@ -345,4 +365,40 @@ export function generateReplayFromExternalInput(
   if (params.algorithm === 'closure') return generateClosureReplay(params, terrain);
   if (params.algorithm === 'zen-match') return generateZenMatchReplay(params, terrain);
   return generateTileExplorerReplay(params, terrain);
+}
+
+/** Build the stable response contract returned by POST /api/v1/generate-replay. */
+export function generateExternalReplayApiResponse(
+  input: ExternalReplayGenerationInput,
+  generatorVersion: string,
+): ExternalReplayApiResponse {
+  const result = generateReplayFromExternalInput(input);
+  const decoded = decodeFromString(result.replayCode);
+  const normalizedLevelHash = String(result.levelHash || '').trim().toLowerCase();
+  const hasLevelHash = normalizedLevelHash !== '' && normalizedLevelHash !== '(none)';
+  const decodedLevelHash = decoded ? formatHash(decoded.levelHash).toLowerCase() : '';
+  const levelHashMatched = hasLevelHash ? decodedLevelHash === normalizedLevelHash : null;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!decoded) errors.push('生成的 ReplayCode 无法解码');
+  if (levelHashMatched === false) errors.push('ReplayCode 的 LevelHash 与地形不一致');
+  if (!hasLevelHash) warnings.push('地形未提供 LevelHash，无法执行 ReplayCode 地形身份校验');
+
+  return {
+    ...result,
+    generatorVersion: String(generatorVersion || 'unknown'),
+    parameterHash: createHash('sha256').update(input.parameterString.trim(), 'utf8').digest('hex'),
+    levelHash: normalizedLevelHash,
+    validation: {
+      ok: errors.length === 0,
+      checks: {
+        parametersParsed: true,
+        terrainValidated: true,
+        replayCodeDecoded: Boolean(decoded),
+        levelHashMatched,
+      },
+      warnings,
+      errors,
+    },
+  };
 }
