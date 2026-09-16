@@ -4,7 +4,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFileSync, existsSync, readdirSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, unlinkSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
@@ -51,7 +51,9 @@ export const GENERATION_STRATEGIES_DIR = join(PROJECT_ROOT, 'strategies');
 export const GENERATION_RUNS_DIR = join(PROJECT_ROOT, 'output', 'runs');
 export const GENERATION_SCHEMA_PATH = join(PROJECT_ROOT, 'config', 'strategy-v2.schema.json');
 export const GENERATION_CATALOG_PATH = join(PROJECT_ROOT, 'config', 'generation-feature-catalog.json');
-export const UPLOADED_TERRAINS_DIR = process.env.UPLOADED_TERRAINS_DIR || join(PROJECT_ROOT, '.reversegen-cache', 'uploaded-terrains');
+export const UPLOADED_TERRAINS_DIR = String(process.env.UPLOADED_TERRAINS_DIR || '').trim()
+  ? resolve(String(process.env.UPLOADED_TERRAINS_DIR).trim())
+  : join(PROJECT_ROOT, '.reversegen-cache', 'uploaded-terrains');
 export const GENERATION_STRATEGY_ID = /^[a-z0-9][a-z0-9_-]{2,79}$/;
 export const APP_NAME = 'reversegen';
 export const APP_VERSION = (() => {
@@ -116,19 +118,105 @@ export function writeJsonAtomic(path: string, value: unknown): void {
 }
 
 
-/** Resolve terrain: an explicitly selected file takes priority; levelId is the legacy fallback. */
-export function resolveTerrainPath(levelId: string | undefined, levelsDir: string | undefined, terrainPath: string | undefined): string | null {
+export type TerrainSource = 'selected' | 'prepared' | 'packaged' | 'uploaded';
+export type TerrainReference = { path: string; source: TerrainSource };
+export type TerrainDirectory = { dir: string; source: TerrainSource };
+export type LevelListItem = {
+  id: number;
+  name: string;
+  tiles: number;
+  source: TerrainSource;
+  fileName: string;
+};
+
+export const TERRAIN_SOURCE_LABELS: Record<TerrainSource, string> = {
+  selected: '指定目录',
+  prepared: '预备地形',
+  packaged: '入包地形',
+  uploaded: '上传地形',
+};
+
+function isInsideDirectory(path: string, directory: string): boolean {
+  if (!directory) return false;
+  const rel = relative(resolve(directory), resolve(path));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+export function terrainSourceForPath(path: string): TerrainSource {
+  if (isInsideDirectory(path, preparedLevelsDir)) return 'prepared';
+  if (isInsideDirectory(path, packagedLevelsDir)) return 'packaged';
+  if (isInsideDirectory(path, UPLOADED_TERRAINS_DIR)) return 'uploaded';
+  return 'selected';
+}
+
+/** Find the newest matching terrain in a directory, including content-addressed upload files. */
+export function findTerrainInDirectoryByLevelId(dir: string, levelId: string): string | null {
+  if (!dir || !existsSync(dir)) return null;
+  const exactPath = join(dir, `${levelId}.json`);
+  if (existsSync(exactPath)) return exactPath;
+
+  let newest: { path: string; modifiedAt: number } | null = null;
+  try {
+    for (const fileName of readdirSync(dir)) {
+      if (!fileName.toLowerCase().endsWith('.json')) continue;
+      const path = join(dir, fileName);
+      try {
+        const terrain = loadTerrainFromFile(path);
+        if (String(terrain.levelResId) !== String(levelId)) continue;
+        const modifiedAt = statSync(path).mtimeMs;
+        if (!newest || modifiedAt > newest.modifiedAt) newest = { path, modifiedAt };
+      } catch { /* 跳过损坏或非地形 JSON */ }
+    }
+  } catch { /* 跳过不可读目录 */ }
+  return newest?.path ?? null;
+}
+
+function terrainSearchDirectories(levelsDir?: string): TerrainDirectory[] {
+  const candidates: TerrainDirectory[] = [];
+  const add = (dir: string | undefined, source: TerrainSource): void => {
+    const normalized = String(dir || '').trim();
+    if (!normalized) return;
+    const resolved = resolve(normalized);
+    if (candidates.some(candidate => resolve(candidate.dir) === resolved)) return;
+    candidates.push({ dir: normalized, source });
+  };
+
+  if (levelsDir) add(levelsDir, terrainSourceForPath(join(levelsDir, '__probe__.json')));
+  add(preparedLevelsDir, 'prepared');
+  add(packagedLevelsDir, 'packaged');
+  add(UPLOADED_TERRAINS_DIR, 'uploaded');
+  return candidates;
+}
+
+export function resolveTerrainFromDirectories(levelId: string, directories: TerrainDirectory[]): TerrainReference | null {
+  for (const candidate of directories) {
+    const path = findTerrainInDirectoryByLevelId(candidate.dir, levelId);
+    if (path) return { path, source: candidate.source };
+  }
+  return null;
+}
+
+/** Resolve terrain with stable precedence: selected file/dir, prepared, packaged, then uploads. */
+export function resolveTerrainReference(
+  levelId: string | undefined,
+  levelsDir: string | undefined,
+  terrainPath: string | undefined,
+): TerrainReference | null {
   if (terrainPath) {
-    if (existsSync(terrainPath)) return terrainPath;
+    if (existsSync(terrainPath)) return { path: terrainPath, source: terrainSourceForPath(terrainPath) };
     throw new Error(`文件不存在: ${terrainPath}`);
   }
   if (levelId) {
-    const dir = levelsDir || defaultLevelsDir;
-    const p = join(dir, `${levelId}.json`);
-    if (existsSync(p)) return p;
-    throw new Error(`关卡 ${levelId} 不存在: ${p}`);
+    const reference = resolveTerrainFromDirectories(levelId, terrainSearchDirectories(levelsDir));
+    if (reference) return reference;
+    throw new Error(`关卡 ${levelId} 不存在；已检查指定目录、预备地形、入包地形和上传地形`);
   }
   return null;
+}
+
+/** Backward-compatible path-only resolver used by generation and analysis APIs. */
+export function resolveTerrainPath(levelId: string | undefined, levelsDir: string | undefined, terrainPath: string | undefined): string | null {
+  return resolveTerrainReference(levelId, levelsDir, terrainPath)?.path ?? null;
 }
 
 /** Persist a browser-selected terrain so all existing generation/analysis APIs can reuse it by path. */
@@ -152,7 +240,8 @@ export function storeUploadedTerrain(fileName: string, terrainJson: string): str
     if (!terrain.layers.length || !tileCount) throw new Error('文件中没有有效的地形层或牌数据');
     if (existsSync(finalPath)) unlinkSync(tempPath);
     else renameSync(tempPath, finalPath);
-    if (terrain.levelHash) hashToPath.set(terrain.levelHash, finalPath);
+    // 新上传版本可能改变同一关卡的索引结果，清除 Hash 查找缓存。
+    hashToPath.clear();
     return finalPath;
   } catch (error) {
     try { unlinkSync(tempPath); } catch {}
@@ -167,12 +256,13 @@ const hashToPath = new Map<string, string>();
  *  加载完整地形以获取计算后的 levelHash（兼容无 levelHash 字段的旧关卡文件）。 */
 export function findTerrainByLevelHash(levelHash: string, levelsDir?: string): string | null {
   if (!levelHash) return null;
+  const directories = terrainSearchDirectories(levelsDir);
+  const cacheKey = `${levelHash}\u0000${directories.map(({ dir }) => resolve(dir)).join('\u0000')}`;
   // 命中缓存
-  const cached = hashToPath.get(levelHash);
+  const cached = hashToPath.get(cacheKey);
   if (cached && existsSync(cached)) return cached;
 
-  const directories = [...new Set([UPLOADED_TERRAINS_DIR, levelsDir || defaultLevelsDir])];
-  for (const dir of directories) {
+  for (const { dir } of directories) {
     if (!existsSync(dir)) continue;
     try {
       for (const f of readdirSync(dir)) {
@@ -181,8 +271,8 @@ export function findTerrainByLevelHash(levelHash: string, levelsDir?: string): s
         try {
           const terrain = loadTerrainFromFile(p);
           const h = terrain.levelHash;
-          if (h) hashToPath.set(h, p);
           if (h === levelHash) {
+            hashToPath.set(cacheKey, p);
             console.log(`[auto-resolve] ReplayCode levelHash=${levelHash} → ${basename(p)}`);
             return p;
           }
@@ -193,25 +283,71 @@ export function findTerrainByLevelHash(levelHash: string, levelsDir?: string): s
   return null;
 }
 
-/** List level IDs from a directory */
-export function listLevels(dir: string): Array<{ id: number; name: string; tiles: number }> {
+/** Explain common copy/paste mistakes before attempting binary ReplayCode decoding. */
+export function replayCodeInputError(value: string): string | null {
+  const input = String(value || '').trim();
+  if (!input) return '请输入 ReplayCode';
+  if (/^(?:0x)?[0-9a-f]{16}$/i.test(input)) {
+    return '输入的是 LevelHash，不是 ReplayCode；请用关卡 ID 加载地形，或粘贴完整 ReplayCode';
+  }
+  if (/^sha256:[0-9a-f]{32,128}$/i.test(input) || /^[0-9a-f]{40}$/i.test(input) || /^[0-9a-f]{64}$/i.test(input)) {
+    return '输入的是 Revision／资源版本，不是 ReplayCode；请粘贴生成结果中的完整 ReplayCode';
+  }
+  return null;
+}
+
+export function decodeReplayCodeInput(value: string) {
+  const inputError = replayCodeInputError(value);
+  if (inputError) throw new Error(inputError);
+  const replayData = decodeFromString(String(value).trim());
+  if (!replayData) throw new Error('ReplayCode 解码失败；请确认复制的是完整 ReplayCode，而不是 Hash 或 Revision');
+  return replayData;
+}
+
+/** List level IDs from one directory, deduplicating content-addressed revisions by Level ID. */
+export function listLevels(dir: string, source: TerrainSource = 'selected'): LevelListItem[] {
   if (!existsSync(dir)) return [];
-  const results: Array<{ id: number; name: string; tiles: number }> = [];
+  const results = new Map<number, LevelListItem & { modifiedAt: number }>();
   try {
     for (const f of readdirSync(dir)) {
-      if (!f.endsWith('.json')) continue;
-      const id = parseInt(basename(f, '.json'), 10);
-      if (isNaN(id)) continue;
+      if (!f.toLowerCase().endsWith('.json')) continue;
       try {
-        const raw = JSON.parse(readFileSync(join(dir, f), 'utf-8'));
+        const path = join(dir, f);
+        const raw = JSON.parse(readFileSync(path, 'utf-8'));
+        const fileId = Number.parseInt(basename(f, '.json'), 10);
+        const id = Number(raw.levelResId ?? raw.LevelResId ?? fileId);
+        if (!Number.isFinite(id)) continue;
         let total = 0;
         if (raw.layers) for (const l of raw.layers) total += (l.tiles?.length || 0);
-        results.push({ id, name: String(raw.levelResId || id), tiles: total });
-      } catch { results.push({ id, name: String(id), tiles: 0 }); }
+        const modifiedAt = statSync(path).mtimeMs;
+        const previous = results.get(id);
+        if (!previous || modifiedAt > previous.modifiedAt) {
+          results.set(id, {
+            id,
+            name: String(raw.levelResId ?? raw.LevelResId ?? id),
+            tiles: total,
+            source,
+            fileName: f,
+            modifiedAt,
+          });
+        }
+      } catch { /* 跳过损坏或无法识别 Level ID 的 JSON */ }
     }
   } catch { /* ignore */ }
-  results.sort((a, b) => a.id - b.id);
-  return results;
+  return [...results.values()]
+    .sort((a, b) => a.id - b.id)
+    .map(({ modifiedAt: _modifiedAt, ...item }) => item);
+}
+
+/** One index for prepared, packaged and uploaded terrain. Earlier sources win duplicate IDs. */
+export function listAvailableLevels(levelsDir?: string, directories?: TerrainDirectory[]): LevelListItem[] {
+  const merged = new Map<number, LevelListItem>();
+  for (const candidate of directories || terrainSearchDirectories(levelsDir)) {
+    for (const level of listLevels(candidate.dir, candidate.source)) {
+      if (!merged.has(level.id)) merged.set(level.id, level);
+    }
+  }
+  return [...merged.values()].sort((a, b) => a.id - b.id);
 }
 
 
@@ -228,8 +364,7 @@ export function buildGameFromReplay(
   mechanicsText?: string,
   mechanicSeed?: number,
 ): { game: OfflineGame; totalTiles: number } {
-  const replayData = decodeFromString(replayCode);
-  if (!replayData) throw new Error('ReplayCode 解码失败');
+  const replayData = decodeReplayCodeInput(replayCode);
 
   // 加载地形
   let path: string | null = null;
@@ -319,12 +454,15 @@ export function getGradeStrategy1Config(): GradeStrategy1Config {
   return gradeStrategy1Config ?? loadGradeStrategy1Config();
 }
 
-// ── 默认关卡目录（--levels-dir / LEVELS_DIR 可覆盖）──
-export let defaultLevelsDir: string = String(process.env.LEVELS_DIR || '').trim()
+// ── 关卡库目录：预备优先，入包兜底；LEVELS_DIR 保持旧部署兼容。──
+export let preparedLevelsDir: string = String(process.env.PREPARED_LEVELS_DIR || process.env.LEVELS_DIR || '').trim()
   || join(__dirname, '..', '..', 'TileMatchShell', 'Tools', 'Config', 'Json', 'Levels');
+export let packagedLevelsDir: string = String(process.env.PACKAGED_LEVELS_DIR || '').trim();
+export let defaultLevelsDir: string = preparedLevelsDir;
 
 export function setDefaultLevelsDir(value: string): void {
   defaultLevelsDir = value;
+  preparedLevelsDir = value;
 }
 
 /** 清除分档配置缓存（config-reload 端点使用）。 */

@@ -34,10 +34,16 @@ import { generateReplayFromExternalInput } from '../../src/external-generation.j
 import { MAX_DOCK_SLOTS } from '../../src/constants.js';
 import {
   defaultLevelsDir,
+  decodeReplayCodeInput,
   findTerrainByLevelHash,
+  listAvailableLevels,
   listLevels,
+  preparedLevelsDir,
   resolveTerrainPath,
+  resolveTerrainReference,
   storeUploadedTerrain,
+  TERRAIN_SOURCE_LABELS,
+  terrainSourceForPath,
   json,
   parseBody,
 } from './runtime.js';
@@ -88,8 +94,16 @@ export async function handleExternalGenerateReplay(req: IncomingMessage, res: Se
 
 export async function handleLevels(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   if (url.pathname !== '/api/levels' || req.method !== 'GET') return false;
-    const dir = url.searchParams.get('dir') || defaultLevelsDir;
-    json(res, { ok: true, dir, levels: listLevels(dir) });
+    const requestedDir = url.searchParams.get('dir') || '';
+    const levels = requestedDir
+      ? listLevels(requestedDir, terrainSourceForPath(`${requestedDir}/__probe__.json`))
+      : listAvailableLevels();
+    json(res, {
+      ok: true,
+      dir: requestedDir || preparedLevelsDir,
+      levels,
+      precedence: ['prepared', 'packaged', 'uploaded'],
+    });
     return true;
   }
 
@@ -101,7 +115,13 @@ export async function handleTerrainUpload(req: IncomingMessage, res: ServerRespo
       if (bodyError) throw new Error(bodyError);
       if (!fileName || typeof terrainJson !== 'string') throw new Error('缺少地形文件名或内容');
       const resolvedPath = storeUploadedTerrain(fileName, terrainJson);
-      json(res, { ok: true, fileName: basename(fileName), resolvedPath });
+      json(res, {
+        ok: true,
+        fileName: basename(fileName),
+        resolvedPath,
+        source: 'uploaded',
+        sourceLabel: TERRAIN_SOURCE_LABELS.uploaded,
+      });
     } catch (err) { json(res, { ok: false, error: err instanceof Error ? err.message : String(err) }, 400); }
     return true;
   }
@@ -115,14 +135,20 @@ export async function handleTerrainInfo(req: IncomingMessage, res: ServerRespons
       };
       // replayCode 决定地形，否则用 levelId/terrainPath
       let path: string | null = null;
+      let source = terrainPath ? terrainSourceForPath(terrainPath) : undefined;
       if (replayCode) {
-        const replayData = decodeFromString(replayCode);
-        if (replayData && replayData.levelHash !== 0n) {
+        const replayData = decodeReplayCodeInput(replayCode);
+        if (replayData.levelHash !== 0n) {
           const hashStr = replayData.levelHash.toString(16).padStart(16, '0');
           path = findTerrainByLevelHash(hashStr, levelsDir);
+          if (path) source = terrainSourceForPath(path);
         }
       }
-      if (!path) path = resolveTerrainPath(levelId, levelsDir, terrainPath);
+      if (!path) {
+        const reference = resolveTerrainReference(levelId, levelsDir, terrainPath);
+        path = reference?.path ?? null;
+        source = reference?.source;
+      }
       if (!path) throw new Error('请提供关卡ID、文件路径或有效的 ReplayCode');
 
       const terrain = loadTerrainFromFile(path);
@@ -133,22 +159,20 @@ export async function handleTerrainInfo(req: IncomingMessage, res: ServerRespons
       // 如果提供了 ReplayCode，解码返回花色分布
       let suitPreview: { suitCount: number; tilesPerSuit: { suit: number; count: number }[] } | undefined;
       if (replayCode) {
-        const replayData = decodeFromString(replayCode);
-        if (replayData) {
-          const ordered = getCanonicalTileOrder(allTiles);
-          const sc = new Map<number, number>();
-          for (let i = 0; i < ordered.length && i < replayData.instanceArray.length; i++) {
-            const tile = ordered[i];
-            if (!tile.isConst) {
-              const s = replayData.instanceArray[i] & 0x3F;
-              sc.set(s, (sc.get(s) ?? 0) + 1);
-            }
+        const replayData = decodeReplayCodeInput(replayCode);
+        const ordered = getCanonicalTileOrder(allTiles);
+        const sc = new Map<number, number>();
+        for (let i = 0; i < ordered.length && i < replayData.instanceArray.length; i++) {
+          const tile = ordered[i];
+          if (!tile.isConst) {
+            const s = replayData.instanceArray[i] & 0x3F;
+            sc.set(s, (sc.get(s) ?? 0) + 1);
           }
-          suitPreview = {
-            suitCount: sc.size,
-            tilesPerSuit: [...sc.entries()].sort((a, b) => a[0] - b[0]).map(([suit, count]) => ({ suit, count })),
-          };
         }
+        suitPreview = {
+          suitCount: sc.size,
+          tilesPerSuit: [...sc.entries()].sort((a, b) => a[0] - b[0]).map(([suit, count]) => ({ suit, count })),
+        };
       }
 
       // 计算依赖深度（供 LayerClosure 算法预填闭合率）
@@ -171,6 +195,8 @@ export async function handleTerrainInfo(req: IncomingMessage, res: ServerRespons
         width: terrain.LevelWidth,
         height: terrain.LevelHeight,
         resolvedPath: path,
+        source: source || terrainSourceForPath(path),
+        sourceLabel: TERRAIN_SOURCE_LABELS[source || terrainSourceForPath(path)],
         suitPreview: suitPreview ?? null,
         // 特殊机制：地形 tile 里写着的挂件（来源 1）
         extras: [...countTerrainExtras(allTiles).entries()].sort((a, b) => a[0] - b[0])
@@ -637,9 +663,7 @@ export async function handleDecode(req: IncomingMessage, res: ServerResponse, ur
     const body = await parseBody(req);
     try {
       const { replayCode } = body as { replayCode?: string };
-      if (!replayCode) throw new Error('Missing replayCode');
-      const data = decodeFromString(replayCode);
-      if (!data) throw new Error('Failed to decode');
+      const data = decodeReplayCodeInput(replayCode || '');
 
       const tiles = Array.from(data.instanceArray, (b, i) => ({
         index: i, state: (b >> 6) & 0x3, elemIdx: b & 0x3F, elemValue: (b & 0x3F) + 1,
@@ -662,11 +686,8 @@ export async function handleReplayClosure(req: IncomingMessage, res: ServerRespo
       const { replayCode, levelsDir, terrainPath } = body as {
         replayCode?: string; levelsDir?: string; terrainPath?: string;
       };
-      if (!replayCode) throw new Error('Missing replayCode');
-
       // 解析 ReplayCode
-      const replayData = decodeFromString(replayCode);
-      if (!replayData) throw new Error('ReplayCode 解码失败');
+      const replayData = decodeReplayCodeInput(replayCode || '');
 
       // 解析地形
       let path: string | null = null;
@@ -745,10 +766,7 @@ export async function handleReplayParams(req: IncomingMessage, res: ServerRespon
       const { replayCode, levelsDir, terrainPath } = body as {
         replayCode?: string; levelsDir?: string; terrainPath?: string;
       };
-      if (!replayCode) throw new Error('Missing replayCode');
-
-      const replayData = decodeFromString(replayCode);
-      if (!replayData) throw new Error('ReplayCode 解码失败');
+      const replayData = decodeReplayCodeInput(replayCode || '');
 
       // 解析地形
       let path: string | null = null;
@@ -758,14 +776,11 @@ export async function handleReplayParams(req: IncomingMessage, res: ServerRespon
         path = findTerrainByLevelHash(hashStr, levelsDir || defaultLevelsDir);
       }
       if (!path && terrainPath) path = resolveTerrainPath(undefined, undefined, terrainPath);
-      if (path) {
-        // 从文件路径提取 levelId（文件名不含扩展名）
-        levelId = basename(path, '.json');
-      }
-
       // 加载地形以获取深度分层
       if (!path) throw new Error('无法解析地形（ReplayCode 中无 levelHash 或无匹配关卡文件）');
       const terrain = loadTerrainFromFile(path);
+      // 上传文件名带内容 Hash，关卡 ID 必须取地形内容而不是文件名。
+      levelId = String(terrain.levelResId || '') || null;
       const allTiles = getAllTiles(terrain);
       const freeTiles = allTiles.filter(t => !t.isConst);
       const ordered = getCanonicalTileOrder(allTiles);
@@ -807,6 +822,8 @@ export async function handleReplayParams(req: IncomingMessage, res: ServerRespon
         levelId,
         levelResId: terrain.levelResId,
         levelHash: terrain.levelHash || '',
+        source: terrainSourceForPath(path),
+        sourceLabel: TERRAIN_SOURCE_LABELS[terrainSourceForPath(path)],
         colorCount,
         dock,
         closeRates,
@@ -825,10 +842,7 @@ export async function handleReplayCostlog(req: IncomingMessage, res: ServerRespo
       const { replayCode, levelId, levelsDir, terrainPath } = body as {
         replayCode?: string; levelId?: string; levelsDir?: string; terrainPath?: string;
       };
-      if (!replayCode) throw new Error('缺少 replayCode');
-
-      const replayData = decodeFromString(replayCode);
-      if (!replayData) throw new Error('ReplayCode 解码失败');
+      const replayData = decodeReplayCodeInput(replayCode || '');
 
       // 解析地形
       let path: string | null = null;

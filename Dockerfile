@@ -18,14 +18,16 @@ RUN mkdir -p \
       /app/.reversegen-cache/uploaded-terrains \
       /app/output/runs \
       /app/replays/generated \
-      /data/levels \
+      /data/prepared-levels \
+      /data/packaged-levels \
       /data/uploaded-terrains \
-  && chown -R node:node /app /data/levels /data/uploaded-terrains
+  && chown -R node:node /app /data/prepared-levels /data/packaged-levels /data/uploaded-terrains
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=80
-ENV LEVELS_DIR=/data/levels
+ENV PREPARED_LEVELS_DIR=/data/prepared-levels
+ENV PACKAGED_LEVELS_DIR=/data/packaged-levels
 ENV UPLOADED_TERRAINS_DIR=/data/uploaded-terrains
 ENV APP_SURFACE=generator
 

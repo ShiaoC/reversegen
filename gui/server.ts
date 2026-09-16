@@ -27,8 +27,9 @@ import {
   APP_NAME,
   APP_VERSION,
   GUI_DIR,
-  defaultLevelsDir,
-  listLevels,
+  packagedLevelsDir,
+  preparedLevelsDir,
+  listAvailableLevels,
   setDefaultLevelsDir,
   serveStatic,
   json,
@@ -289,11 +290,13 @@ server.listen(port, host, () => {
       }
     }
   }
-  if (existsSync(defaultLevelsDir)) {
-    const n = listLevels(defaultLevelsDir).length;
-    console.log(`📁 ReplayCode 自动匹配目录（兼容功能）: ${defaultLevelsDir} (${n} 个关卡)`);
+  if (existsSync(preparedLevelsDir) || existsSync(packagedLevelsDir)) {
+    const n = listAvailableLevels().length;
+    console.log(`📁 预备地形目录: ${preparedLevelsDir}${existsSync(preparedLevelsDir) ? '' : '（不存在）'}`);
+    console.log(`📦 入包地形目录: ${packagedLevelsDir || '未配置'}${packagedLevelsDir && !existsSync(packagedLevelsDir) ? '（不存在）' : ''}`);
+    console.log(`🗂️  可用关卡索引: ${n} 个（预备优先、入包兜底）`);
   } else {
-    console.log('ℹ️  未配置 ReplayCode 自动匹配目录；手动选择地形文件不受影响');
+    console.log('ℹ️  未配置预备／入包地形目录；手动选择地形文件不受影响');
   }
   console.log('');
   if (autoOpen) {

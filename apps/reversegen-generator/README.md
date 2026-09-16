@@ -46,13 +46,17 @@ docker build -t reversegen-generator:local .
 docker run --rm \
   --name reversegen-generator \
   -p 5180:80 \
-  -v /absolute/path/to/Levels:/data/levels:ro \
+  -v /absolute/path/to/prepared-levels:/data/prepared-levels:ro \
+  -v /absolute/path/to/packaged-levels:/data/packaged-levels:ro \
+  -v /absolute/path/to/reversegen-uploads:/data/uploaded-terrains \
   -e APP_BASE_PATH=/ \
   -e FRAME_ANCESTORS="'self' http://localhost:*" \
   reversegen-generator:local
 ```
 
-`LEVELS_DIR=/data/levels` 是容器内默认路径。首页仍允许用户：
+服务端按 `PREPARED_LEVELS_DIR → PACKAGED_LEVELS_DIR → UPLOADED_TERRAINS_DIR`
+建立同一份关卡索引；同一关卡编号同时存在时优先使用预备地形。三个目录必须分别挂载，
+不要再通过替换同一个 `/data/levels` 挂载来切换资料来源。首页仍允许用户：
 
 - 修改默认关卡目录；
 - 从默认目录按关卡 ID 加载；
@@ -93,7 +97,10 @@ docker run --rm \
 | `APP_SURFACE` | `generator` | 仅暴露生成首页；不要在此镜像中改为完整工具站 |
 | `APP_BASE_PATH` | `/` | 反向代理挂载路径 |
 | `FRAME_ANCESTORS` | 空 | CSP `frame-ancestors`，生产环境填写主平台来源 |
-| `LEVELS_DIR` | `/data/levels` | 服务端默认关卡目录 |
+| `PREPARED_LEVELS_DIR` | `/data/prepared-levels` | 预备地形目录；直接输入编号时优先 |
+| `PACKAGED_LEVELS_DIR` | `/data/packaged-levels` | 入包地形目录；预备地形不存在时兜底 |
+| `UPLOADED_TERRAINS_DIR` | `/data/uploaded-terrains` | 浏览器上传地形的持久目录；同样进入关卡列表 |
+| `LEVELS_DIR` | 空 | 旧部署兼容；未配置 `PREPARED_LEVELS_DIR` 时作为预备目录 |
 | `PLATFORM_API_URL` | 空 | 预留的平台 API 根地址，当前首页不使用 |
 
 不要把平台地址、凭据或关卡宿主机路径写死进镜像。

@@ -339,7 +339,7 @@ kbd{
   <input type="file" id="terrainFile" accept=".json,application/json" style="display:none" onchange="loadTerrainFile(this.files&&this.files[0])">
   <input type="file" id="levelsFolderPicker" accept=".json,application/json" webkitdirectory directory multiple style="display:none" onchange="selectLevelsDirectory(this.files)">
   <div class="terrain-loader">
-    <input type="text" id="levelsDir" class="levels-dir" placeholder="默认关卡目录" aria-label="默认关卡目录" title="可输入运行 GUI 的电脑上的 Levels 目录；也可选择当前电脑上的目录" oninput="onLevelsDirInput()">
+    <input type="text" id="levelsDir" class="levels-dir" placeholder="预备地形目录" aria-label="地形目录" title="默认使用服务端地形库（预备优先、入包兜底）；也可明确输入或选择其他目录" oninput="onLevelsDirInput()">
     <button type="button" class="btn btn-ghost" onclick="document.getElementById('levelsFolderPicker').click()">选择目录</button>
     <input type="text" id="levelId" inputmode="numeric" list="levelList" autocomplete="off" placeholder="关卡 ID" aria-label="默认路径关卡 ID" title="输入或点击查看当前目录中的关卡" oninput="onLevelIdInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();loadLevel()}">
     <datalist id="levelList"></datalist>
@@ -1100,6 +1100,8 @@ function renderLevelList(levels){
     var option=document.createElement('option');
     option.value=String(level.id);
     var detail=[];
+    var sourceLabels={prepared:'预备',packaged:'入包',uploaded:'上传',selected:'指定'};
+    if(level.source)detail.push(sourceLabels[level.source]||level.source);
     if(level.tiles!=null)detail.push(level.tiles+'张');
     if(level.fileName&&level.fileName!==String(level.id)+'.json')detail.push(level.fileName);
     option.label=detail.length?String(level.id)+' · '+detail.join(' · '):String(level.id);
@@ -1143,7 +1145,7 @@ async function refreshLevelList(dir){
     if(requestId!==levelListRequestId||!data.ok)return false;
     renderLevelList(data.levels||[]);
     var status=document.getElementById('terrainFileName');
-    if(!S.level)status.textContent=(data.levels||[]).length+' 个关卡可选';
+    if(!S.level)status.textContent=(data.levels||[]).length+' 个关卡可选（预备优先）';
     return true;
   }catch(e){
     if(requestId===levelListRequestId)renderLevelList([]);
@@ -1190,7 +1192,7 @@ async function initDefaultLevelsDir(){
     if(data.ok){
       if(!input.value)input.value=String(data.dir||'');
       renderLevelList(data.levels||[]);
-      if(!S.level)document.getElementById('terrainFileName').textContent=(data.levels||[]).length+' 个关卡可选';
+      if(!S.level)document.getElementById('terrainFileName').textContent=(data.levels||[]).length+' 个关卡可选（预备优先）';
     }
   }catch(e){}
 }
@@ -1255,12 +1257,13 @@ async function loadLevel(source){
     if(d.constTiles>0)html+=' · '+d.constTiles+'固定';
     html+='<br><span style="font-size:10px">步数 <b class="k">'+d.steps+'</b> · Hash '+ (d.levelHash||'(无)');
     if(d.depthCount)html+=' · 深度 <b>'+d.depthCount+'</b> ['+d.tilesPerDepth.join(',')+']';
+    if(d.sourceLabel)html+=' · 来源 <b>'+d.sourceLabel+'</b>';
     html+='</span>';
     info.innerHTML=html;
 
     document.getElementById('levelPanel').style.display='';
     document.getElementById('levelBadge').textContent='#'+(d.levelResId||id)+' · '+d.freeTiles+'牌 · '+d.steps+'步';
-    if(!source)document.getElementById('terrainFileName').textContent='默认路径';
+    document.getElementById('terrainFileName').textContent=d.sourceLabel||(!source?'默认路径':'指定文件');
 
     updateCostPresets(d.steps);
     updateCostHint(d.steps);
@@ -2501,6 +2504,14 @@ async function importParams(){
   var code=document.getElementById('decodeInput').value.trim();
   var out=document.getElementById('decodeOut');
   if(!code){out.textContent='';return}
+  if(/^(?:0x)?[0-9a-f]{16}$/i.test(code)){
+    out.textContent='这是 LevelHash，不是 ReplayCode。请在上方输入关卡 ID 加载地形，或粘贴完整 ReplayCode。';
+    out.className='msg msg-err';return
+  }
+  if(/^sha256:[0-9a-f]{32,128}$/i.test(code)||/^[0-9a-f]{40}$/i.test(code)||/^[0-9a-f]{64}$/i.test(code)){
+    out.textContent='这是 Revision／资源版本，不是 ReplayCode。请粘贴生成结果中的完整 ReplayCode。';
+    out.className='msg msg-err';return
+  }
   out.textContent='解析中...';out.className='msg';
   try{
     if(/^RGP\d+\./.test(code)||code.charAt(0)==='{'||/^(?:闭合率|Cost)/i.test(code)||code.indexOf(':')>=0){
