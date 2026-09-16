@@ -232,7 +232,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (appSurface === 'generator') {
-    if (url.pathname === '/reversegen-theme.js' || url.pathname === '/reversegen-theme.css') {
+    if (url.pathname === '/reversegen-theme.js' || url.pathname === '/reversegen-theme.css' || url.pathname === '/reversegen-nav.js') {
       serveStatic(res, join(GUI_DIR, url.pathname));
       return;
     }

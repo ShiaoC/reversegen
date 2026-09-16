@@ -51,7 +51,7 @@ export const GENERATION_STRATEGIES_DIR = join(PROJECT_ROOT, 'strategies');
 export const GENERATION_RUNS_DIR = join(PROJECT_ROOT, 'output', 'runs');
 export const GENERATION_SCHEMA_PATH = join(PROJECT_ROOT, 'config', 'strategy-v2.schema.json');
 export const GENERATION_CATALOG_PATH = join(PROJECT_ROOT, 'config', 'generation-feature-catalog.json');
-export const UPLOADED_TERRAINS_DIR = join(PROJECT_ROOT, '.reversegen-cache', 'uploaded-terrains');
+export const UPLOADED_TERRAINS_DIR = process.env.UPLOADED_TERRAINS_DIR || join(PROJECT_ROOT, '.reversegen-cache', 'uploaded-terrains');
 export const GENERATION_STRATEGY_ID = /^[a-z0-9][a-z0-9_-]{2,79}$/;
 export const APP_NAME = 'reversegen';
 export const APP_VERSION = (() => {
@@ -332,4 +332,3 @@ export function resetGradeConfigs(): void {
   gradeConfig = null;
   gradeStrategy1Config = null;
 }
-
